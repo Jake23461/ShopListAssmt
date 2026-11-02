@@ -20,6 +20,9 @@ class CategoryPagerAdapter(
     override fun getItemId(position: Int): Long =
         PagerPage.idAt(position, categoryCount, planMode)
 
+    override fun containsItem(itemId: Long): Boolean =
+        PagerPage.containsId(itemId, categoryCount, planMode)
+
     override fun createFragment(position: Int): Fragment =
         when (val page = PagerPage.at(position, categoryCount, planMode)) {
             PagerPage.Overview ->

@@ -13,6 +13,9 @@ sealed class PagerPage {
     data class Category(val index: Int) : PagerPage()
 
     companion object {
+        private const val PLAN_BIT = 1L
+        private const val OVERVIEW_BIT = 2L
+
         fun at(position: Int, categoryCount: Int, planMode: Boolean): PagerPage =
             if (planMode) {
                 if (position == 0) Overview else Category(position - 1)
@@ -22,10 +25,21 @@ sealed class PagerPage {
 
         /**
          * The ID FragmentStateAdapter uses to decide whether an existing fragment
-         * can be reused for a position. Same as the adapter's default (the position).
+         * can be reused. It describes what the page shows (mode, and Overview or
+         * which category index), not where it is, so a fragment is only reused for
+         * the same kind of page. Category fragments look their category up by
+         * index, so the index is what identifies them.
          */
-        @Suppress("UNUSED_PARAMETER") // part of the signature the page ID should depend on
-        fun idAt(position: Int, categoryCount: Int, planMode: Boolean): Long =
-            position.toLong()
+        fun idAt(position: Int, categoryCount: Int, planMode: Boolean): Long {
+            val mode = if (planMode) PLAN_BIT else 0L
+            return when (val page = at(position, categoryCount, planMode)) {
+                Overview -> OVERVIEW_BIT or mode
+                is Category -> (page.index.toLong() shl 2) or mode
+            }
+        }
+
+        /** True if some position currently has this ID (FragmentStateAdapter.containsItem). */
+        fun containsId(id: Long, categoryCount: Int, planMode: Boolean): Boolean =
+            (0..categoryCount).any { idAt(it, categoryCount, planMode) == id }
     }
 }

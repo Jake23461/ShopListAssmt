@@ -1,7 +1,9 @@
 package com.mmgpt.shoplistgpt
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -64,6 +66,22 @@ class PagerPageTest {
                     PagerPage.idAt(position, after, planMode = false)
                 )
             }
+        }
+    }
+
+    @Test
+    fun containsId_matchesCurrentPagesOnly() {
+        val summaryWith4 = PagerPage.idAt(4, 4, planMode = false)
+        assertTrue(PagerPage.containsId(summaryWith4, 4, planMode = false))
+        // With 20 categories the Summary has moved to position 20 and keeps its ID;
+        // position 4 now has a category ID, so nothing stale is kept there.
+        assertEquals(summaryWith4, PagerPage.idAt(20, 20, planMode = false))
+        // A Plan-mode page ID is never valid in the Shop pager.
+        assertFalse(PagerPage.containsId(PagerPage.idAt(1, 4, planMode = true), 4, planMode = false))
+        // A category that no longer exists is not contained.
+        assertFalse(PagerPage.containsId(PagerPage.idAt(10, 20, planMode = false), 4, planMode = false))
+        for (position in 0..4) {
+            assertTrue(PagerPage.containsId(PagerPage.idAt(position, 4, true), 4, planMode = true))
         }
     }
 
