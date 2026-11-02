@@ -405,3 +405,107 @@ MOVE and UP, but no DOWN. So `touchStartX` is usually still `0f`, and on UP
 - `MainActivity.kt`, `PlanCategoriesFragment.kt`, `ShopCategoriesFragment.kt` (fix 2).
 - `PagerNavigationTest.kt` (test (a) correction, tests d/e, real-speed input helper).
 - `TESTS.md`, `AI_LOG.md`.
+
+---
+
+## Task 3: Duplication analysis, options only (2026-11-02). No code changed.
+
+**Request**
+- Analyse the duplication caused by having separate Plan and Shop modes. Give at least 3 options,
+  each with what's duplicated, how to remove it, benefit, risk and how to test it. Recommend
+  one, and record the baseline line counts.
+
+**Baseline line counts** (`wc -l`, at commit `320b66d`)
+
+| File | Lines |
+|---|---|
+| `MainActivity.kt` | 377 |
+| `ShoppingListViewModel.kt` | 217 |
+| `adapter/ItemAdapter.kt` | 177 |
+| `PlanCategoriesFragment.kt` | 151 |
+| `PlanCategoryFragment.kt` | 134 |
+| `ShopCategoriesFragment.kt` | 77 |
+| `CategoryFragment.kt` | 70 |
+| `PagerPage.kt` | 45 |
+| `adapter/CategorySummaryAdapter.kt` | 42 |
+| `CategoryPagerAdapter.kt` | 34 |
+| `ShoppingCategory.kt` | 23 |
+| `ShoppingItem.kt` | 12 |
+| **Kotlin total** | **1359** |
+| The 4 fragments together | 432 |
+
+**Duplication found**
+
+| # | Duplicated code | Where | Lines |
+|---|---|---|---|
+| D1 | Fragment boilerplate: `viewModel`/`_binding`/`binding` fields, `onCreateView`, `onDestroyView` | all 4 fragments | ~15 × 4 = ~60 |
+| D2 | `newInstance(index)` companion and reading `ARG_INDEX` | `PlanCategoryFragment`, `CategoryFragment` | ~10 × 2 = ~20 |
+| D3 | Drag-to-reorder `ItemTouchHelper` callback (only the ViewModel call differs) | `PlanCategoriesFragment:40-61`, `PlanCategoryFragment:43-64` | 22 × 2 = 44 |
+| D4 | Edit (rename) dialog | `PlanCategoriesFragment:131-144`, `PlanCategoryFragment:106-119` | 14 × 2 = 28 |
+| D5 | Wrapping a list in the two "Add…" placeholder rows | `PlanCategoriesFragment:122-126`, `PlanCategoryFragment:98-100` | ~4 × 2 = 8 |
+| D6 | Double-tap → go to page (`GestureDetector` and touch listener). Only the row→page mapping and the coordinate handling differ | `PlanCategoriesFragment:81-105`, `ShopCategoriesFragment:39-62` | ~25 × 2 = ~49 |
+| D7 | Strike-through and transparency styling for checked items | `ItemAdapter:64-72`, `ItemAdapter:133-139` | ~8 + 6 |
+| D8 | Mode stored in 4 places: `MainActivity.inPlanMode`, `CategoryPagerAdapter.planMode`, `ItemAdapter.Mode`, the `planMode` flag in `PagerPage`; plus `if (mode == …)` branches in `ItemAdapter` (`:81, :108, :116, :127`) | several | — |
+| D9 | `showStartPage`/`showShopping`/`showPlanning` repeat the show/hide and title code, the `"d MMM"` date format, and creating a new `CategoryPagerAdapter` | `MainActivity:92, 323-376` | ~20 |
+| D10 | Not caused by the modes: the "copy the list, check the index, set it, `saveState()`" pattern | `ShoppingListViewModel` (6 copies of the guard, 12 `saveState()` calls) | ~30 |
+
+**Test coverage gap:** the existing tests only cover page navigation (`PagerNavigationTest`,
+`PagerPageTest`). Nothing tests adding, editing, deleting or reordering categories and items,
+select-all, clear-all, checking or flagging items, or the Plan→Shop "have at home" change. Every
+option below touches that code, so characterization tests for it should come first, whichever
+option is chosen.
+
+**Options**
+
+1. **Pull the shared parts into helpers; keep all 4 fragments.** (D1–D7)
+   - How: an abstract `CategoryPageFragment` base class (binding, ViewModel, view lifecycle,
+     index argument), plus small reusable pieces: `reorderDragHelper(adapter) { from, to -> … }`,
+     `showRenameDialog(current) { newName -> … }`, `withAddRows(items)`,
+     `RecyclerView.onDoubleTapRow { position -> … }` (always using RecyclerView-local
+     coordinates), and a `setChecked` styling helper in `ItemAdapter`.
+   - Benefit: removes about 120–140 lines. Each fragment keeps its own clear purpose, the fixes
+     from Task 2 live in one place (the double-tap handler exists only once), and there is no
+     change in behaviour.
+   - Risk: low. Mostly moving code around. Watch for: the fragment lifecycle in the base class
+     (`_binding` must still be cleared), and the two different coordinate methods (Plan uses
+     `e.x`, Shop uses `rawX` minus the location) being merged into one; both work out the same.
+   - Test: new characterization tests first, then the full existing suite (17 tests) plus a
+     before/after line count.
+2. **Merge each Plan/Shop pair into one fragment that takes the mode as an argument.**
+   (4 fragments → 2: `OverviewFragment(mode)`, `CategoryPageFragment(mode, index)`)
+   - How: move the mode into the fragment arguments; `CategoryPagerAdapter.createFragment` passes it.
+   - Benefit: fewer classes, and D1, D2 and D6 disappear completely. About 150 lines removed.
+   - Risk: medium. The pairs differ in *behaviour* far more than in *structure*. The Plan
+     overview is an editable list (ItemAdapter, placeholders, drag, clear-all), while the Shop
+     overview is a read-only summary (CategorySummaryAdapter). Merging them means
+     `if (planMode)` branches all through each class, which is the duplication problem moved
+     inside a class. The mode must also survive fragment recreation; it does, because the Task 2
+     page IDs include the mode, but it's another thing that can go wrong.
+   - Test: same as option 1, plus the rotation test (b) and a check that each page is the
+     right fragment class with the right mode.
+3. **Represent the mode once, and keep mode-specific behaviour in one place.** (D8, D9)
+   - How: one `enum class ShopMode { PLAN, SHOP }` used by `MainActivity`, `CategoryPagerAdapter`,
+     `PagerPage` and `ItemAdapter`, instead of the current `Boolean` flags and
+     `ItemAdapter.Mode`. Then one `enterMode(mode)` function in `MainActivity` replaces the
+     repeated parts of `showPlanning`, `showShopping` and `showStartPage` (adapter, title, date
+     format, show/hide).
+   - Benefit: fewer places to keep in sync, and adding a mode later becomes easier. It removes
+     the duplicated mode handling, but only about 30–40 lines.
+   - Risk: medium. It touches every layer, including the "have at home" change on leaving Plan
+     (`showStartPage`), which has no tests today.
+   - Test: characterization tests for switching modes (Plan → Home → Shop keeps ticked items
+     as "have at home"; titles), plus the full existing suite.
+4. **(Smaller, not mode-related) Tidy the ViewModel.** (D10)
+   - How: one private `updateCategories { list -> … }` helper that copies the list, applies
+     the change, and calls `saveState()`.
+   - Benefit: about 30 lines removed, and no method can forget to save. Risk: low.
+   - Test: on-device tests for the ViewModel's edit methods, since it is an `AndroidViewModel`
+     backed by SharedPreferences and needs a device or Robolectric.
+
+**Recommendation: option 1,** done in small commits with characterization tests added first.
+It removes the most duplication for the least risk, keeps each fragment readable, and puts the
+Task 2 double-tap fix in one place. Option 3 could follow as a separate task if the mode handling
+in `MainActivity` keeps causing trouble; option 2 is not recommended.
+
+**Files changed**
+- `AI_LOG.md` only.
