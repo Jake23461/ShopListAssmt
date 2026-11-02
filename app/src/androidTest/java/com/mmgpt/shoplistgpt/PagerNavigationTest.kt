@@ -1,7 +1,9 @@
 package com.mmgpt.shoplistgpt
 
 import android.content.Context
-import android.os.ParcelFileDescriptor
+import android.os.SystemClock
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.widget.TextView
 import androidx.lifecycle.ViewModelProvider
@@ -220,8 +222,23 @@ class PagerNavigationTest {
         waitForPagerIdle()
     }
 
-    /** Double-tap with real input events, holding each tap for ~80 ms like a finger. */
+    /**
+     * Double-tap with injected touchscreen events at finger speed: each tap held 80 ms,
+     * 80 ms between taps (Espresso's taps are only held for a few ms).
+     * The emulator occasionally delays injected events enough that the taps no longer
+     * count as a double-tap (seen with and without the fix). That leaves the page
+     * unchanged, so in that case the double-tap is tried once more. A wrong page is
+     * never retried.
+     */
     private fun humanDoubleTapRow(name: String) {
+        val pageBefore = onActivity { pager(it).currentItem }
+        repeat(2) {
+            sendHumanDoubleTap(name)
+            if (onActivity { pager(it).currentItem } != pageBefore) return
+        }
+    }
+
+    private fun sendHumanDoubleTap(name: String) {
         Thread.sleep(ViewConfiguration.getDoubleTapTimeout() + 200L)
         var x = 0
         var y = 0
@@ -233,11 +250,17 @@ class PagerNavigationTest {
             y = location[1] + view.height / 2
         }
         val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
-        for (action in listOf("DOWN", "UP", "DOWN", "UP")) {
-            ParcelFileDescriptor.AutoCloseInputStream(
-                automation.executeShellCommand("input motionevent $action $x $y")
-            ).use { it.readBytes() }
-            Thread.sleep(80)
+        repeat(2) {
+            val downTime = SystemClock.uptimeMillis()
+            for (action in listOf(MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP)) {
+                val event = MotionEvent.obtain(
+                    downTime, SystemClock.uptimeMillis(), action, x.toFloat(), y.toFloat(), 0
+                )
+                event.source = InputDevice.SOURCE_TOUCHSCREEN
+                automation.injectInputEvent(event, false) // don't wait for the app, or the holds get longer
+                event.recycle()
+                Thread.sleep(80)
+            }
         }
         waitForPagerIdle()
     }
