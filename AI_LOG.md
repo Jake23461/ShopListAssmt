@@ -226,3 +226,91 @@ MOVE and UP, but no DOWN. So `touchStartX` is usually still `0f`, and on UP
 **Problems**
 - My `adb` test scripts made a few false starts (they read the wrong page or typed into the wrong
   screen). Those runs were discarded and redone; none of them affected the conclusions.
+- **Correction (found in Task 2b):** "Not the cause" for the wrap-around listener above is wrong for
+  double-taps. Every adb double-tap in this task used `input tap`, which lifts the finger instantly.
+  With human-speed taps, the listener and the pager do interfere with double-tap navigation. See
+  Task 2b.
+
+---
+
+## Task 2b: Write tests before fixing (2026-11-02). No fix yet.
+
+**Request**
+1. Set up on-device testing: add the `AndroidJUnitRunner`, `androidx.junit` and `espresso-core`
+   (from the version catalog). Commit this on its own.
+2. Write tests for the root cause (pages kept by position). A unit test on page IDs, pulling the
+   logic into a small function if needed without changing behaviour. On-device tests: (a) import
+   changes the count, then double-tap category 5; (b) rotate in Plan, then Shop's last page should
+   be Summary; (c) controls that double-tap each category with an unchanged list.
+3. Run them. The bug tests should fail and (c) should pass. Add TESTS.md. Leave the swipe bug alone.
+
+**Actions**
+1. `app/build.gradle.kts`: added `testInstrumentationRunner` and the two `androidTestImplementation`
+   lines. `connectedDebugAndroidTest` ran `ExampleInstrumentedTest` and it passed. Committed on its own
+   (`530a896`).
+2. Added `PagerPage.kt`: `PagerPage.at(position, categoryCount, planMode)` (which page a position
+   shows) and `PagerPage.idAt(...)` (its page ID, which currently returns the position, the same as
+   FragmentStateAdapter's default). `CategoryPagerAdapter` now uses them in `createFragment` and
+   `getItemId`. **No behaviour change:** the same fragments are created at the same positions, and
+   the overridden `getItemId` returns the same value as the default, so the default `containsItem`
+   still matches.
+3. Added `PagerPageTest.kt` (6 unit tests) and `PagerNavigationTest.kt` (4 on-device tests). Test
+   data is written into SharedPreferences before launch. Test (a) does what `importXlsx()` does
+   after parsing: `viewModel.setCategories(...)`, then `showShopping()` via the SHOP button.
+   Test (b) uses `ActivityScenario.recreate()`, which goes through the same lifecycle as rotation.
+4. Added TESTS.md with the results.
+
+**Problems**
+- **Espresso 3.5.1 (the catalog version) can't run on this emulator (API 37).** Every Espresso test
+  failed with `NoSuchMethodException: android.hardware.input.InputManager.getInstance`. Espresso
+  looks this method up by reflection, and it was removed in Android 15. I tried 3.6.1 first and it
+  failed the same way. **Bumped `espressoCore` to 3.7.0 in `gradle/libs.versions.toml`** (latest
+  stable), which fixed it. This is a test-only dependency; the app is unchanged. Gradle, AGP and
+  Kotlin were not touched. Committed separately.
+- **The (c) controls fail, but they were expected to pass.** I investigated before writing them up:
+  - First failure: Plan "Bakery → Dairy". This was partly a test artifact. Consecutive steps
+    double-tapped within 300 ms of each other, and the rows are closer together than the double-tap
+    distance limit, so `GestureDetector` paired taps across steps. Fixed in the test by waiting
+    longer than the 300 ms double-tap timeout before each double-tap.
+  - Still failing after that: Shop Fruit → "Summary" (3/3 runs), Shop Dairy → "Bakery" (1/3),
+    Plan Frozen → "Dairy" (3/3).
+  - Diagnosed with a temporary logging test (deleted, not committed). It logged touch events and
+    page-change stack traces:
+    - The double-tap handlers change page on the **second finger-down**, before the finger lifts.
+      The jump moves the page under the finger away. That page's list gets `ACTION_CANCEL`, and the
+      finger-up goes to ViewPager2's own RecyclerView.
+    - **Shop → first category (confirmed with a stack trace):** `onPageSelected(0)` comes from
+      `ShopCategoriesFragment.kt:50`, then `onPageSelected(4)` comes from **`MainActivity.kt:108`**,
+      the wrap-around listener. Its `touchStartX` is still 0, so the finger-up looks like a 437 px
+      swipe while `currentItem == 0`.
+    - **Longer jumps land on a page on the way** (Plan Frozen → Dairy, Shop Dairy → Bakery). This
+      happens consistently, but I didn't capture the exact step that stops the scroll. Two traced
+      runs with different timing didn't reproduce it. Likely mechanism: the leftover finger-up
+      interrupts ViewPager2's smooth scroll, and the pager snaps to the nearest page.
+  - **Checked against real-speed input:** `adb input motionevent` double-taps with about 80 ms per
+    tap, on the real app with 4 categories, 3 tries per row:
+    - Shop: Fruit → Summary ×3, Dairy → Frozen ×3, Bakery → Frozen ×2, Frozen OK.
+    - Plan: Fruit OK, Dairy OK, Bakery → Fruit/Dairy, Frozen → Dairy ×3.
+    - Instant `adb input tap` taps (used in Task 2) went to the right page every time.
+  - **Conclusion:** the reported "sometimes goes to the wrong page" has two causes.
+    (1) Pages are remembered by position (Task 2, tests a and b).
+    (2) Double-tap navigation happens while the finger is still down, so the finger-up is treated
+    as a swipe by the wrap-around listener and the pager. (2) is likely what users hit most, since
+    it doesn't need an import or rotation.
+  - The tests were left to fail honestly (not changed to pass). Fixing (2) touches the wrap-around
+    listener, which I was asked to leave alone, so that needs a decision from the user.
+- Test runs uninstall the app from the emulator, so I reinstalled it afterwards (`installDebug`).
+  Its saved data is now empty; before, it had no categories either. `Shop-Example.xlsx` is still in
+  `/sdcard/Download/`.
+- The "Java compiler version 21 has deprecated support for ... version 8" warning comes from the
+  project's existing `sourceCompatibility = 1.8`, not from this task.
+
+**Files changed**
+- `app/build.gradle.kts`: test runner and androidTest dependencies.
+- `gradle/libs.versions.toml`: `espressoCore` 3.5.1 → 3.7.0.
+- `app/src/main/java/.../PagerPage.kt` (new) and `CategoryPagerAdapter.kt`: logic moved out, no
+  behaviour change.
+- `app/src/test/java/.../PagerPageTest.kt` (new), `app/src/androidTest/java/.../PagerNavigationTest.kt`
+  (new).
+- `TESTS.md` (new), `AI_LOG.md`.
+- `.idea/*` was not touched or committed.
