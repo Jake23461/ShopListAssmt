@@ -1,0 +1,176 @@
+package com.mmgpt.shoplistgpt
+
+import android.content.Context
+import android.view.ViewConfiguration
+import android.widget.TextView
+import androidx.lifecycle.ViewModelProvider
+import androidx.test.core.app.ActivityScenario
+import androidx.test.espresso.Espresso.onIdle
+import androidx.test.espresso.Espresso.onView
+import androidx.test.espresso.action.ViewActions.click
+import androidx.test.espresso.action.ViewActions.doubleClick
+import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
+import androidx.test.espresso.matcher.ViewMatchers.withId
+import androidx.test.espresso.matcher.ViewMatchers.withText
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.viewpager2.widget.ViewPager2
+import org.hamcrest.Matchers.allOf
+import org.json.JSONArray
+import org.json.JSONObject
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Double-tapping a category in the overview page (first page in Plan, last in Shop)
+ * should open that category's page. Data is seeded into SharedPreferences before
+ * launch, so no file picker is involved.
+ */
+@RunWith(AndroidJUnit4::class)
+class PagerNavigationTest {
+
+    private val context: Context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val summary = context.getString(R.string.summary_heading)
+    private val fourCategories = listOf("Fruit", "Dairy", "Bakery", "Frozen")
+    private lateinit var scenario: ActivityScenario<MainActivity>
+
+    @After
+    fun tearDown() {
+        scenario.close()
+        prefs().edit().clear().commit()
+    }
+
+    // (a) Bug: import changes the number of categories while the Shop pager is alive.
+    @Test
+    fun shopMode_afterImportChangesCategoryCount_doubleTapCategory5_opensItsPage() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnShop)).perform(click())
+        goToPage(4)
+        assertEquals("precondition: page 4 is the Summary", summary, visibleHeading())
+
+        onView(withId(R.id.action_home)).perform(click())
+        // What importXlsx() does after parsing: replace the categories, then showShopping().
+        val aisles = (1..20).map { "Aisle $it" }
+        onActivity { viewModel(it).setCategories(categories(aisles, firstId = 100)) }
+        onView(withId(R.id.btnShop)).perform(click())
+
+        // The app comes back on position 4 showing a Summary; double-tap category 5 there.
+        assertEquals("precondition: a Summary is showing", summary, visibleHeading())
+        doubleTapRow("Aisle 5")
+
+        assertEquals("page opened by double-tapping 'Aisle 5'", "Aisle 5", visibleHeading())
+    }
+
+    // (b) Bug: Plan-mode fragments restored into the Shop pager after rotation.
+    @Test
+    fun planMode_rotateThenShop_lastPageIsSummary() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnPlan)).perform(click())
+        goToPage(4) // last category page in Plan mode
+        scenario.recreate() // same lifecycle as rotating the device
+
+        onView(withId(R.id.btnShop)).perform(click())
+        val lastPage = onActivity { pager(it).adapter!!.itemCount - 1 }
+        goToPage(lastPage)
+
+        assertEquals("last Shop page after rotating in Plan mode", summary, visibleHeading())
+    }
+
+    // (c) Control: unchanged list, Plan mode.
+    @Test
+    fun planMode_unchangedList_doubleTapEachCategory_opensItsPage() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnPlan)).perform(click())
+        assertEachRowOpensItsPage(overviewPage = 0)
+    }
+
+    // (c) Control: unchanged list, Shop mode.
+    @Test
+    fun shopMode_unchangedList_doubleTapEachCategory_opensItsPage() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnShop)).perform(click())
+        assertEachRowOpensItsPage(overviewPage = 4)
+    }
+
+    /** Double-taps every category from the overview page; reports all wrong rows at once. */
+    private fun assertEachRowOpensItsPage(overviewPage: Int) {
+        val results = fourCategories.map { name ->
+            goToPage(overviewPage)
+            doubleTapRow(name)
+            "'$name' -> '${visibleHeading()}'"
+        }
+        val expected = fourCategories.map { "'$it' -> '$it'" }
+        assertEquals("double-tap results", expected, results)
+    }
+
+    // --- helpers ---
+
+    private fun prefs() = context.getSharedPreferences("state", Context.MODE_PRIVATE)
+
+    private fun categories(headings: List<String>, firstId: Long = 0L): List<ShoppingCategory> {
+        var itemId = firstId * 10
+        return headings.mapIndexed { i, heading ->
+            ShoppingCategory(firstId + i, heading, listOf(ShoppingItem(itemId++, "$heading item")))
+        }
+    }
+
+    /** Writes the same JSON that ShoppingListViewModel.saveState() produces, then launches. */
+    private fun launchWith(headings: List<String>) {
+        val cats = JSONArray()
+        categories(headings).forEach { cat ->
+            val items = JSONArray()
+            cat.items.forEach { items.put(JSONObject().put("id", it.id).put("name", it.name)) }
+            cats.put(JSONObject().put("id", cat.id).put("heading", cat.heading).put("items", items))
+        }
+        val state = JSONObject().put("planDate", "2026-11-01").put("categories", cats)
+        prefs().edit().clear().putString("state", state.toString()).commit()
+        scenario = ActivityScenario.launch(MainActivity::class.java)
+    }
+
+    private fun <T> onActivity(block: (MainActivity) -> T): T {
+        var result: Any? = null
+        scenario.onActivity { result = block(it) }
+        @Suppress("UNCHECKED_CAST")
+        return result as T
+    }
+
+    private fun viewModel(activity: MainActivity) =
+        ViewModelProvider(activity)[ShoppingListViewModel::class.java]
+
+    private fun pager(activity: MainActivity): ViewPager2 =
+        activity.findViewById(R.id.viewPager)
+
+    private fun goToPage(position: Int) {
+        onActivity { pager(it).setCurrentItem(position, false) }
+        waitForPagerIdle()
+    }
+
+    private fun doubleTapRow(name: String) {
+        // Let any earlier tap expire, or GestureDetector pairs it with this one
+        // (rows are closer together than the double-tap slop).
+        Thread.sleep(ViewConfiguration.getDoubleTapTimeout() + 200L)
+        onView(allOf(withId(R.id.tvName), withText(name), isDisplayed())).perform(doubleClick())
+        waitForPagerIdle()
+    }
+
+    /** Espresso does not wait for ViewPager2's smooth scroll, so poll its scroll state. */
+    private fun waitForPagerIdle() {
+        onIdle()
+        repeat(50) {
+            if (onActivity { pager(it).scrollState } == ViewPager2.SCROLL_STATE_IDLE) return
+            Thread.sleep(100)
+        }
+    }
+
+    /** Heading text of the page currently on screen. */
+    private fun visibleHeading(): String {
+        var text = ""
+        onView(allOf(withId(R.id.tvHeading), isDisplayed())).check { view, noView ->
+            if (view == null) throw noView
+            text = (view as TextView).text.toString()
+        }
+        return text
+    }
+}
