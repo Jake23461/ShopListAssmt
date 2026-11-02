@@ -314,3 +314,94 @@ MOVE and UP, but no DOWN. So `touchStartX` is usually still `0f`, and on UP
   (new).
 - `TESTS.md` (new), `AI_LOG.md`.
 - `.idea/*` was not touched or committed.
+
+---
+
+## Task 2c: Fix both causes (2026-11-02)
+
+**Request**
+1. Page IDs: give each page an ID based on what it shows (mode, and Overview vs which
+   category), and override `containsItem` to match. Commit as
+   "Task 2: fix stale pages by giving each page a stable ID".
+2. Double-tap/swipe conflict: make the smallest change that stops a double-tap being treated
+   as a swipe, and keep the wrap-around swipe working. Commit as
+   "Task 2: stop double-tap being read as a swipe".
+3. Rerun all tests, add an "After fix" column to TESTS.md, update the log, push.
+
+**Fix 1: stable page IDs** (`fef1b1d`)
+- `PagerPage.idAt` now encodes what the page shows: bit 0 is the mode (Plan), bit 1 marks the
+  Overview page, and the remaining bits are the category index. A Summary, a category page and
+  a Plan page therefore never share an ID.
+- Added `PagerPage.containsId`, and `CategoryPagerAdapter.containsItem` uses it. When the
+  number of categories changes, or when a Plan fragment is restored after rotation, the stale
+  fragment's ID is no longer valid, so FragmentStateAdapter discards it and builds the right one.
+- **Design choice:** category pages are identified by index, not by category ID. The category
+  fragments are created with an index and look up `categories[index]` live. Keying them by
+  category ID would reuse a fragment whose index is out of date after a reorder.
+- Added unit test `containsId_matchesCurrentPagesOnly`.
+- The 3 failing unit tests and test (b) now pass.
+
+**Test (a) correction** (`cf21e3c`, committed before fix 1)
+- Its precondition "a Summary is showing" (after the import) was asserting the bug itself, so it
+  failed once fix 1 worked. Rewritten:
+  1. Check that position 4 shows "Aisle 5" after the import.
+  2. Go to the real Summary and double-tap "Aisle 5".
+- Checked against the pre-fix code: the rewritten test still fails ("Summary" at position 4).
+
+**New tests before fix 2** (`bb53395`, then `9737943`)
+- (d) Human-speed double-taps on every category, both modes.
+- (e) Wrap-around swipes, both modes: wrap only at the ends, and other swipes move one page.
+- Before fix 2 (fix 1 applied):
+  - (d) produced wrong pages in every run.
+  - (e) failed: swiping forward on the last page did not wrap.
+  - (a) failed: the 16-page jump to "Aisle 5" landed on "Aisle 6" or "Aisle 7".
+- **Problem: the (d) input was unreliable at first.** Fixed in `9737943`.
+  1. Sending each event as a shell command (`input motionevent`) was too slow. `GestureDetector`
+     only counts a double-tap if the second finger-down comes within 300 ms of the *first*
+     finger-down. My first attempt measured the wrong gap (first finger-up to second finger-down).
+  2. Switched to `UiAutomation.injectInputEvent`. With `sync = true` it waits for the app after
+     each event, which stretched the 80 ms holds to 100–230 ms. Temporary logging in the
+     fragments (removed, not committed) showed a missed tap had 298 ms between finger-downs.
+  3. Final version: `injectInputEvent(event, false)` with 80 ms holds and an 80 ms gap.
+     Occasional "nothing happened" results remained, and they happen *both* before and after
+     the fix, so they come from the emulator, not the code. In that case only, the helper
+     retries once. A wrong page is never retried.
+
+**Fix 2: stop double-tap being read as a swipe** (`728a18c`)
+- `PlanCategoriesFragment` and `ShopCategoriesFragment`: changed `onDoubleTap` (fires on the
+  second finger-down) to `onDoubleTapEvent`, acting only on `ACTION_UP`. The page now changes
+  after the finger has lifted, so no part of the touch reaches the ViewPager afterwards. The
+  rest of the handler is unchanged.
+- `MainActivity`: the wrap-around listener changed from `setOnTouchListener` to
+  `addOnItemTouchListener`.
+  - **Why the switch:** the old listener almost never received `ACTION_DOWN` (the page
+    underneath consumes it), so it measured swipes from a stale start position. An item touch
+    listener's `onInterceptTouchEvent` sees every event of the gesture, including the DOWN. Just
+    ignoring gestures without a DOWN, while keeping `setOnTouchListener`, would have switched
+    the wrap feature off completely.
+  - **Gestures it didn't see start are ignored:** `touchStartX` is now nullable, and it is
+    cleared on UP and CANCEL.
+  - **Only wraps at the ends:** the swipe must start and end on the end page
+    (`touchStartPage`), so an ordinary swipe that ends on page 0 can't trigger a wrap.
+  - **Posted page change:** returning `true` makes the RecyclerView stop scrolling, which would
+    cancel a page change made inside the callback, so the change is posted.
+
+**Results after both fixes** (details in TESTS.md)
+- Unit tests: 8/8 pass.
+- On-device: 9/9 pass in 3 out of 3 consecutive full runs. The human-speed tests (d) alone
+  passed 8 out of 8 runs (64 double-taps) with no wrong page.
+- Manual check with adb human-timed double-taps (the Task 2b repro): 24/24 correct, against
+  14/24 wrong before. Swiping forward from the first page now goes to the next page in both
+  modes.
+
+**Problems / notes**
+- `GestureDetectorCompat` is deprecated in the current AndroidX core. It was already used before
+  this task; I left it alone.
+- Emulator: test runs uninstall the app, so I reinstalled it and set its saved data back to the
+  empty state from before (`{"planDate":"2026-11-01","categories":[]}`).
+
+**Files changed**
+- `PagerPage.kt`, `CategoryPagerAdapter.kt`, `PagerPageTest.kt` (fix 1).
+- `MainActivity.kt`, `PlanCategoriesFragment.kt`, `ShopCategoriesFragment.kt` (fix 2).
+- `PagerNavigationTest.kt` (test (a) correction, tests d/e, real-speed input helper).
+- `TESTS.md`, `AI_LOG.md`.

@@ -1,9 +1,13 @@
 # Tests
 
-Tests for the "double-tap opens the wrong page" bug, written before any fix.
-Results are from 2026-11-02, before the fix. The on-device tests ran on the
-`Medium_Phone_API_37.0` emulator (Android 17), and the results are the same
-across 3 recorded runs unless the table says otherwise.
+Tests for the "double-tap opens the wrong page" bug. They were written before the fixes, and
+then run again after each fix. The on-device tests run on the `Medium_Phone_API_37.0` emulator
+(Android 17).
+
+- **Before fix:** the code before either fix (2026-11-02). For tests added later
+  (d, e), this column is the code with fix 1 applied but not fix 2.
+- **After fix:** both fixes applied (`fef1b1d` page IDs, `728a18c` double-tap/swipe).
+  All tests passed in 3 out of 3 consecutive full runs.
 
 How to run them. Use JDK 21 (see AI_LOG.md, Task 1), and have an emulator or device connected.
 
@@ -14,51 +18,61 @@ How to run them. Use JDK 21 (see AI_LOG.md, Task 1), and have an emulator or dev
 
 ## Unit tests: `app/src/test/.../PagerPageTest.kt`
 
-These test `PagerPage`, the page/ID logic taken out of `CategoryPagerAdapter`
-with no change in behaviour. `FragmentStateAdapter` reuses the fragment it already
-has for a page ID, so a position whose page changes must get a new ID.
+These test `PagerPage`, the page and page-ID logic used by `CategoryPagerAdapter`.
+`FragmentStateAdapter` reuses the fragment it already has for a page ID, so a position
+whose page changes must get a new ID.
 
-| Test | Expected | Result |
-|---|---|---|
-| `shopMode_categoriesFirst_summaryLast` | Shop: categories at 0..n-1, Summary at n | ✅ Pass |
-| `planMode_categoryListFirst_thenCategories` | Plan: category list at 0, category i at i+1 | ✅ Pass |
-| `idsAreUniqueWithinOneLayout` | No two positions share an ID | ✅ Pass |
-| `shopMode_summaryAndCategoryAtSamePosition_haveDifferentIds` | Summary (4 categories) and category 5 (20 categories), both at position 4, have different IDs | ❌ **Fail (bug):** both are `4` |
-| `shopMode_whenCategoryCountChanges_positionsWhosePageChanges_getNewIds` | When the number of categories changes, every position whose page changes gets a new ID | ❌ **Fail (bug):** 4→20, position 4 is Summary→Category(4) but keeps ID `4` |
-| `planAndShopPagesAtSamePosition_haveDifferentIds` | A Plan page and a Shop page at the same position have different IDs | ❌ **Fail (bug):** position 0 is ID `0` in both modes |
+| Test | Expected | Before fix | After fix |
+|---|---|---|---|
+| `shopMode_categoriesFirst_summaryLast` | Shop: categories at 0..n-1, Summary at n | ✅ Pass | ✅ Pass |
+| `planMode_categoryListFirst_thenCategories` | Plan: category list at 0, category i at i+1 | ✅ Pass | ✅ Pass |
+| `idsAreUniqueWithinOneLayout` | No two positions share an ID | ✅ Pass | ✅ Pass |
+| `shopMode_summaryAndCategoryAtSamePosition_haveDifferentIds` | Summary (4 categories) and category 5 (20 categories), both at position 4, have different IDs | ❌ Fail: both `4` | ✅ Pass |
+| `shopMode_whenCategoryCountChanges_positionsWhosePageChanges_getNewIds` | When the number of categories changes, every position whose page changes gets a new ID | ❌ Fail: 4→20, position 4 keeps ID `4` | ✅ Pass |
+| `planAndShopPagesAtSamePosition_haveDifferentIds` | A Plan page and a Shop page at the same position have different IDs | ❌ Fail: position 0 is `0` in both | ✅ Pass |
+| `containsId_matchesCurrentPagesOnly` *(added with fix 1)* | `containsItem` is true only for IDs of the current pages | n/a (default `containsItem`) | ✅ Pass |
 
 ## On-device tests: `app/src/androidTest/.../PagerNavigationTest.kt`
 
-Test data is written into SharedPreferences before launch, so no file picker is
-used. Double-taps use Espresso `doubleClick()`.
+Test data is written into SharedPreferences before launch, so no file picker is used.
+(a)–(c) use Espresso `doubleClick()`, which holds each tap for only a few ms.
+(d) injects touchscreen events at finger speed instead: each tap held 80 ms, 80 ms apart.
 
-| Test | Expected | Result |
-|---|---|---|
-| (a) `shopMode_afterImportChangesCategoryCount_doubleTapCategory5_opensItsPage`: 4 categories, Shop, go to Summary, Home, set 20 categories the way import does, SHOP, double-tap "Aisle 5" | Opens "Aisle 5" | ❌ **Fail (bug):** stays on "Summary", the stale fragment at position 4 |
-| (b) `planMode_rotateThenShop_lastPageIsSummary`: Plan, last category page, recreate the activity (as rotation does), SHOP, go to last page | Last page is "Summary" | ❌ **Fail (bug):** shows "Frozen", a restored Plan-mode fragment |
-| (c) `planMode_unchangedList_doubleTapEachCategory_opensItsPage` | Each of the 4 categories opens its own page | ❌ **Fail, not expected:** Frozen → "Dairy" (3/3 runs). Fruit, Dairy and Bakery are correct. |
-| (c) `shopMode_unchangedList_doubleTapEachCategory_opensItsPage` | Each of the 4 categories opens its own page | ❌ **Fail, not expected:** Fruit → "Summary" (3/3 runs), Dairy → "Bakery" (1/3 runs). Others are correct. |
-| `ExampleInstrumentedTest.useAppContext` | Package name is correct | ✅ Pass |
+| Test | Expected | Before fix | After fix |
+|---|---|---|---|
+| (a) `shopMode_afterImportChangesCategoryCount_doubleTapCategory5_opensItsPage`: 4 categories, Shop, go to Summary, Home, set 20 categories the way import does, SHOP. Check position 4, then double-tap "Aisle 5" on the Summary | Position 4 is "Aisle 5", and the double-tap opens "Aisle 5" | ❌ Position 4 shows a stale "Summary". With fix 1 only, the double-tap lands on "Aisle 6"/"Aisle 7" (cause 2) | ✅ Pass |
+| (b) `planMode_rotateThenShop_lastPageIsSummary`: Plan, last category page, recreate the activity (as rotation does), SHOP, go to last page | Last page is "Summary" | ❌ "Frozen" (restored Plan fragment) | ✅ Pass |
+| (c) `planMode_unchangedList_doubleTapEachCategory_opensItsPage` | Each category opens its own page | ❌ Frozen → "Dairy" | ✅ Pass |
+| (c) `shopMode_unchangedList_doubleTapEachCategory_opensItsPage` | Each category opens its own page | ❌ Fruit → "Summary" (sometimes also Dairy → "Bakery") | ✅ Pass |
+| (d) `planMode_humanSpeedDoubleTap_eachCategory_opensItsPage` *(added before fix 2)* | Each category opens its own page | ❌ e.g. Bakery → "Fruit", Frozen → "Dairy" | ✅ Pass |
+| (d) `shopMode_humanSpeedDoubleTap_eachCategory_opensItsPage` *(added before fix 2)* | Each category opens its own page | ❌ Fruit → "Summary", Dairy → "Frozen" | ✅ Pass |
+| (e) `planMode_wrapAroundSwipe_onlyAtTheEnds` *(added before fix 2)* | Back on first page → last page; forward on last → first; other swipes move one page | ❌ Forward on the last page does not wrap | ✅ Pass |
+| (e) `shopMode_wrapAroundSwipe_onlyAtTheEnds` *(added before fix 2)* | Same, in Shop mode | ❌ Forward on the last page does not wrap | ✅ Pass |
+| `ExampleInstrumentedTest.useAppContext` | Package name is correct | ✅ Pass | ✅ Pass |
 
-### Why the (c) controls fail
+Manual check after the fix: human-timed `adb input motionevent` double-taps on every row,
+3 times each, in both modes. All 24 opened the right page (before the fix, 14 of 24 were wrong).
 
-They were expected to pass, but they find a second real cause of the bug. It
-isn't related to page IDs (see AI_LOG.md, Task 2b):
+## The two causes and their fixes
 
-- The double-tap handlers change page on the **second finger-down**, before the
-  finger is lifted. The jump moves the touched page away, Android cancels the touch
-  on it, and the finger-up goes to the ViewPager's own RecyclerView instead.
-- **Shop → first category:** that finger-up reaches the wrap-around swipe listener
-  (`MainActivity.kt:96-121`). Its `touchStartX` is still `0`, so it reads the tap as
-  a long swipe while `currentItem == 0` and jumps to the last page (Summary). Traced
-  with a stack trace to `MainActivity.kt:108`.
-- **Jumps of 3 or more pages (e.g. Plan → Frozen):** the pager stops on a page on the way
-  to the target. The touch cancel and the finger-up going to the pager were captured,
-  but the exact step that stops the scroll has not been traced yet.
-- The same wrong pages happen with human-speed double-taps through `adb`
-  (finger held about 80 ms). They don't happen with instant `adb input tap` taps, which is
-  why Task 2 missed this.
+1. **Pages were remembered by position** (tests a, b and the unit tests). `FragmentStateAdapter`
+   used the position as the page ID. So after the number of categories changed, or after
+   rotating in Plan mode, an old fragment (Summary or a Plan page) was reused where a different
+   page belongs.
+   **Fix:** `PagerPage.idAt` builds the ID from what the page shows: the mode, plus either
+   Overview or the category index. `CategoryPagerAdapter.containsItem` matches those IDs.
+2. **A double-tap was read as a swipe** (tests c, d, e). The page changed on the second
+   *finger-down*, so the finger-up went to the ViewPager. The wrap-around listener (whose start
+   position was stale) or the pager's own scrolling then moved to another page.
+   **Fix:** the double-tap handlers change page on the second *finger-up*. The wrap-around
+   listener is now a `RecyclerView.OnItemTouchListener`, so it sees where each gesture starts,
+   ignores gestures it didn't see start, and only wraps when the swipe starts and ends on an
+   end page.
 
-The test waits longer than the 300 ms double-tap timeout before each double-tap.
-Otherwise `GestureDetector` would pair the first tap with the previous step's tap,
-which is a test artifact.
+## Notes on the test setup
+
+- Each double-tap waits longer than the 300 ms double-tap timeout first. Otherwise
+  `GestureDetector` pairs it with the previous step's tap.
+- (d) Sometimes the emulator delays injected events enough that they no longer count as a
+  double-tap. Then nothing happens, both before and after the fix. In that case only, the
+  helper tries once more. A wrong page is never retried.
