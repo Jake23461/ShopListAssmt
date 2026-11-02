@@ -1,6 +1,7 @@
 package com.mmgpt.shoplistgpt
 
 import android.content.Context
+import android.os.ParcelFileDescriptor
 import android.view.ViewConfiguration
 import android.widget.TextView
 import androidx.lifecycle.ViewModelProvider
@@ -9,6 +10,8 @@ import androidx.test.espresso.Espresso.onIdle
 import androidx.test.espresso.Espresso.onView
 import androidx.test.espresso.action.ViewActions.click
 import androidx.test.espresso.action.ViewActions.doubleClick
+import androidx.test.espresso.action.ViewActions.swipeLeft
+import androidx.test.espresso.action.ViewActions.swipeRight
 import androidx.test.espresso.matcher.ViewMatchers.isDisplayed
 import androidx.test.espresso.matcher.ViewMatchers.withId
 import androidx.test.espresso.matcher.ViewMatchers.withText
@@ -98,15 +101,73 @@ class PagerNavigationTest {
         assertEachRowOpensItsPage(overviewPage = 4)
     }
 
+    // (d) Double-taps at human speed (finger down ~80 ms per tap) instead of Espresso's
+    // very short taps. Before the fix, the page changed while the finger was still down.
+    @Test
+    fun planMode_humanSpeedDoubleTap_eachCategory_opensItsPage() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnPlan)).perform(click())
+        assertEachRowOpensItsPage(overviewPage = 0, humanSpeed = true)
+    }
+
+    @Test
+    fun shopMode_humanSpeedDoubleTap_eachCategory_opensItsPage() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnShop)).perform(click())
+        assertEachRowOpensItsPage(overviewPage = 4, humanSpeed = true)
+    }
+
+    // (e) Wrap-around swipe still works at the ends, and ordinary swipes don't wrap.
+    @Test
+    fun planMode_wrapAroundSwipe_onlyAtTheEnds() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnPlan)).perform(click())
+        assertSwipes(
+            listOf("Categories", "Fruit", "Dairy", "Bakery", "Frozen")
+        )
+    }
+
+    @Test
+    fun shopMode_wrapAroundSwipe_onlyAtTheEnds() {
+        launchWith(fourCategories)
+        onView(withId(R.id.btnShop)).perform(click())
+        assertSwipes(fourCategories + summary)
+    }
+
     /** Double-taps every category from the overview page; reports all wrong rows at once. */
-    private fun assertEachRowOpensItsPage(overviewPage: Int) {
+    private fun assertEachRowOpensItsPage(overviewPage: Int, humanSpeed: Boolean = false) {
         val results = fourCategories.map { name ->
             goToPage(overviewPage)
-            doubleTapRow(name)
+            if (humanSpeed) humanDoubleTapRow(name) else doubleTapRow(name)
             "'$name' -> '${visibleHeading()}'"
         }
         val expected = fourCategories.map { "'$it' -> '$it'" }
         assertEquals("double-tap results", expected, results)
+    }
+
+    /**
+     * [pages] are the headings in pager order. Swiping back on the first page wraps to
+     * the last, swiping forward on the last wraps to the first, and swipes in between
+     * move one page. Reports all swipes at once.
+     */
+    private fun assertSwipes(pages: List<String>) {
+        val last = pages.size - 1
+        val cases = listOf(
+            Triple(0, "forward", pages[1]),
+            Triple(1, "back", pages[0]),
+            Triple(0, "back", pages[last]),
+            Triple(last, "forward", pages[0]),
+            Triple(last, "back", pages[last - 1])
+        )
+        val results = cases.map { (start, direction, _) ->
+            goToPage(start)
+            Thread.sleep(ViewConfiguration.getDoubleTapTimeout() + 200L)
+            onView(withId(R.id.viewPager)).perform(if (direction == "forward") swipeLeft() else swipeRight())
+            waitForPagerIdle()
+            "${pages[start]} swipe $direction -> ${visibleHeading()}"
+        }
+        val expected = cases.map { (start, direction, end) -> "${pages[start]} swipe $direction -> $end" }
+        assertEquals("swipe results", expected, results)
     }
 
     // --- helpers ---
@@ -156,6 +217,28 @@ class PagerNavigationTest {
         // (rows are closer together than the double-tap slop).
         Thread.sleep(ViewConfiguration.getDoubleTapTimeout() + 200L)
         onView(allOf(withId(R.id.tvName), withText(name), isDisplayed())).perform(doubleClick())
+        waitForPagerIdle()
+    }
+
+    /** Double-tap with real input events, holding each tap for ~80 ms like a finger. */
+    private fun humanDoubleTapRow(name: String) {
+        Thread.sleep(ViewConfiguration.getDoubleTapTimeout() + 200L)
+        var x = 0
+        var y = 0
+        onView(allOf(withId(R.id.tvName), withText(name), isDisplayed())).check { view, noView ->
+            if (view == null) throw noView
+            val location = IntArray(2)
+            view.getLocationOnScreen(location)
+            x = location[0] + view.width / 2
+            y = location[1] + view.height / 2
+        }
+        val automation = InstrumentationRegistry.getInstrumentation().uiAutomation
+        for (action in listOf("DOWN", "UP", "DOWN", "UP")) {
+            ParcelFileDescriptor.AutoCloseInputStream(
+                automation.executeShellCommand("input motionevent $action $x $y")
+            ).use { it.readBytes() }
+            Thread.sleep(80)
+        }
         waitForPagerIdle()
     }
 
