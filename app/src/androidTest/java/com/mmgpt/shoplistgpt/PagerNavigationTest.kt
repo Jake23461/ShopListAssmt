@@ -56,10 +56,14 @@ class PagerNavigationTest {
         onActivity { viewModel(it).setCategories(categories(aisles, firstId = 100)) }
         onView(withId(R.id.btnShop)).perform(click())
 
-        // The app comes back on position 4 showing a Summary; double-tap category 5 there.
-        assertEquals("precondition: a Summary is showing", summary, visibleHeading())
-        doubleTapRow("Aisle 5")
+        // The app comes back on position 4, which is now category 5 (before the fix
+        // it still showed the old Summary fragment).
+        assertEquals("page at position 4 after import", "Aisle 5", visibleHeading())
 
+        // Double-tap category 5 from the Summary, now the last page.
+        goToPage(onActivity { pager(it).adapter!!.itemCount - 1 })
+        assertEquals("precondition: on the Summary", summary, visibleHeading())
+        doubleTapRow("Aisle 5")
         assertEquals("page opened by double-tapping 'Aisle 5'", "Aisle 5", visibleHeading())
     }
 
