@@ -37,7 +37,8 @@ class MainActivity : AppCompatActivity() {
     private var nextItemId = 0L
     private var nextCategoryId = 0L
     private var inPlanMode = false
-    private var touchStartX = 0f
+    private var touchStartX: Float? = null
+    private var touchStartPage = 0
 
     private val filePickerLauncher =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -93,31 +94,39 @@ class MainActivity : AppCompatActivity() {
         binding.viewPager.adapter = pagerAdapter
 
         val pagerRecyclerView = binding.viewPager.getChildAt(0) as RecyclerView
-        pagerRecyclerView.setOnTouchListener { _, event ->
-            when (event.action) {
-                MotionEvent.ACTION_DOWN -> {
-                    touchStartX = event.x
-                    false
-                }
-                MotionEvent.ACTION_UP -> {
-                    val deltaX = event.x - touchStartX
-                    val threshold = 100
-                    val lastIndex = pagerAdapter.itemCount - 1
-                    when {
-                        deltaX > threshold && binding.viewPager.currentItem == 0 -> {
-                            binding.viewPager.currentItem = lastIndex
-                            true
+        // Wrap-around swipe. An item touch listener sees every event of a gesture,
+        // including the ACTION_DOWN that the page underneath consumes, so a swipe is
+        // measured from where it really started. Gestures it did not see start are ignored.
+        pagerRecyclerView.addOnItemTouchListener(object : RecyclerView.SimpleOnItemTouchListener() {
+            override fun onInterceptTouchEvent(rv: RecyclerView, event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchStartX = event.x
+                        touchStartPage = binding.viewPager.currentItem
+                    }
+                    MotionEvent.ACTION_CANCEL -> touchStartX = null
+                    MotionEvent.ACTION_UP -> {
+                        val startX = touchStartX ?: return false
+                        touchStartX = null
+                        val deltaX = event.x - startX
+                        val threshold = 100
+                        val lastIndex = pagerAdapter.itemCount - 1
+                        val current = binding.viewPager.currentItem
+                        // Only wrap when the swipe both started and ended on the end page.
+                        val target = when {
+                            deltaX > threshold && touchStartPage == 0 && current == 0 -> lastIndex
+                            deltaX < -threshold && touchStartPage == lastIndex && current == lastIndex -> 0
+                            else -> return false
                         }
-                        deltaX < -threshold && binding.viewPager.currentItem == lastIndex -> {
-                            binding.viewPager.currentItem = 0
-                            true
-                        }
-                        else -> false
+                        // Returning true makes the RecyclerView stop scrolling, which would
+                        // cancel a page change made here, so change page afterwards.
+                        rv.post { binding.viewPager.currentItem = target }
+                        return true
                     }
                 }
-                else -> false
+                return false
             }
-        }
+        })
 
         var lastSize = viewModel.categories.value?.size ?: 0
         viewModel.categories.observe(this) { categories ->

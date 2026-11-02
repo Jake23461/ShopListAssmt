@@ -37,7 +37,11 @@ class ShopCategoriesFragment : Fragment() {
         binding.recyclerView.adapter = adapter
 
         val gestureDetector = GestureDetectorCompat(requireContext(), object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
+            // Change page when the second tap lifts, not when it lands. Changing page
+            // with the finger still down hands the rest of the touch to the ViewPager,
+            // which then treats it as a swipe.
+            override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+                if (e.actionMasked != MotionEvent.ACTION_UP) return false
                 // Convert raw screen coordinates to RecyclerView's coordinate system
                 val location = IntArray(2)
                 binding.recyclerView.getLocationOnScreen(location)
@@ -50,7 +54,7 @@ class ShopCategoriesFragment : Fragment() {
                     viewPager.currentItem = position
                     return true
                 }
-                return super.onDoubleTap(e)
+                return super.onDoubleTapEvent(e)
             }
         })
 

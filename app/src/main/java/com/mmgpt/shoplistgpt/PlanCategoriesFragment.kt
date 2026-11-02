@@ -79,7 +79,11 @@ class PlanCategoriesFragment : Fragment() {
         dragHelper.attachToRecyclerView(binding.recyclerView)
 
         val gestureDetector = GestureDetectorCompat(requireContext(), object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean {
+            // Change page when the second tap lifts, not when it lands. Changing page
+            // with the finger still down hands the rest of the touch to the ViewPager,
+            // which then treats it as a swipe.
+            override fun onDoubleTapEvent(e: MotionEvent): Boolean {
+                if (e.actionMasked != MotionEvent.ACTION_UP) return false
                 val child = binding.recyclerView.findChildViewUnder(e.x, e.y)
                 val position = child?.let { binding.recyclerView.getChildAdapterPosition(it) } ?: RecyclerView.NO_POSITION
                 if (position != RecyclerView.NO_POSITION) {
@@ -91,7 +95,7 @@ class PlanCategoriesFragment : Fragment() {
                         return true
                     }
                 }
-                return super.onDoubleTap(e)
+                return super.onDoubleTapEvent(e)
             }
         })
 
