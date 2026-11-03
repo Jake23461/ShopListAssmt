@@ -509,3 +509,37 @@ in `MainActivity` keeps causing trouble; option 2 is not recommended.
 
 **Files changed**
 - `AI_LOG.md` only.
+
+---
+
+## Task 3 (quick version): Shared helper for Plan reorder and edit (2026-11-03)
+
+**Request:** move the duplicated drag-to-reorder block and edit dialog in `PlanCategoriesFragment`
+and `PlanCategoryFragment` into one shared helper, with no change in behaviour. Leave the Shop
+fragments and MainActivity alone. Run the existing tests before and after; no new test suite.
+
+**Done** (`Task 3: Move Plan drag-to-reorder and edit dialog into a shared helper`)
+- New `PlanListHelpers.kt` has two pieces:
+  - `reorderDragHelper(adapter, onReorder)`: the `ItemTouchHelper` callback. It skips the
+    "Add..." rows and passes positions without the top "Add..." row.
+  - `Fragment.showEditDialog(current, onSave)`: the edit dialog. It trims the text and ignores
+    empty input.
+- Both Plan fragments call the helpers. Only the ViewModel call differs per fragment
+  (`reorderCategory`/`editCategory` vs `reorderItem`/`editItem`). Removed the now-unused imports.
+
+**Line counts**
+
+| File | Before | After |
+|---|---|---|
+| `PlanCategoriesFragment.kt` | 151 | 116 |
+| `PlanCategoryFragment.kt` | 134 | 97 |
+| `PlanListHelpers.kt` (new) | — | 55 |
+| **Total** | **285** | **268** |
+
+**Tests:** unit tests 8/8 and on-device tests 9/9 passed both before and after. They don't
+cover reorder or edit, so I also checked by hand on the emulator: dragging a category and an item
+moved them on screen and in saved data, and editing a category and an item saved the new name.
+The emulator data was put back to empty afterwards.
+
+**Problems:** none. The `adapterPosition` deprecation warnings moved into the helper along with
+the code; they were there before.
